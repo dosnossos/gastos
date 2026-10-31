@@ -3,11 +3,17 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-<meta name="theme-color" content="#0a0b0f">
+<meta name="theme-color" content="#0a0b0f" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#a3b6c6" media="(prefers-color-scheme: light)">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Gastos">
 <meta name="mobile-web-app-capable" content="yes">
+<meta name="application-name" content="Gastos">
+<meta name="format-detection" content="telephone=no">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <title>Gastos in Home</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -373,6 +379,24 @@ body.ro .mbrand{display:flex}
             <div id="syncInfo" class="lbl" style="margin-bottom:10px"></div>
             <button class="btn" onclick="syncNow(true)">Sincronizar agora</button>
           </div>
+          <div class="card">
+            <h2 style="margin-bottom:8px">Instalar app</h2>
+            <div id="installHint" class="hint">Instalar na tela inicial deixa o app mais rápido, offline e com avisos melhores.</div>
+            <div class="row noact" style="border:0;padding:0;display:flex;gap:10px;flex-wrap:wrap;margin-top:10px">
+              <button class="btn pri" id="btnInstall" onclick="promptInstall()">Instalar</button>
+            </div>
+          </div>
+          <div class="card">
+            <h2 style="margin-bottom:8px">Notificações</h2>
+            <div class="hint">Android (Poco): Chrome → Ativar avisos. Se não aparecer, em Configurações → Apps → Chrome/Gastos → Notificações → permitir; evite “economia de bateria” agressiva para o app.<br><br>iPhone: abra no Safari → Compartilhar → Adicionar à Tela de Início → abra pelo ícone → Ativar avisos. Para lembrete com o app fechado, use o calendário (.ics).<br><br>PC: Chrome/Edge → Ativar avisos (e opcionalmente instalar o app).</div>
+            <div id="notifInfo" class="lbl" style="margin-bottom:10px"></div>
+            <div class="row noact" style="border:0;padding:0;display:flex;gap:10px;flex-wrap:wrap">
+              <button class="btn pri" onclick="enableNotifs()">Ativar avisos</button>
+              <button class="btn" onclick="testNotif()">Testar</button>
+              <button class="btn" onclick="exportICS()">Calendário (.ics)</button>
+            </div>
+            <label class="check" style="margin-top:12px"><input type="checkbox" id="notifAuto" onchange="setNotifAuto(this.checked)"> Avisar ao abrir se houver conta em 3 dias</label>
+          </div>
         </div>
       </div>
     </section>
@@ -509,7 +533,7 @@ var POTS=['Guardado','Viagem','Outros'];
 var MARGEM=100;
 var SPLIT_TXT={meio:'50/50',prop:'proporcional'};
 var RO=EMBEDDED!==null;
-var K_DATA=KP+'-v2',K_MOV=KP+'-mov',K_CFG=KP+'-cfg',K_CAT=KP+'-cats',K_THEME=KP+'-theme',K_CARDS=KP+'-cards',K_REC=KP+'-rec',K_SYNC_AT=KP+'-sync-at';
+var K_DATA=KP+'-v2',K_MOV=KP+'-mov',K_CFG=KP+'-cfg',K_CAT=KP+'-cats',K_THEME=KP+'-theme',K_CARDS=KP+'-cards',K_REC=KP+'-rec',K_SYNC_AT=KP+'-sync-at',K_NOTIF=KP+'-notif';
 
 /* ===== BASE ===== */
 var $=function(id){return document.getElementById(id)};
@@ -593,7 +617,7 @@ async function syncNow(manual){
   if(remote&&remoteAt&&remoteAt>localAt&&Array.isArray(remote.data)){
    applySnapshot(remote);ls(K_SYNC_AT,remoteAt);syncState.ok=true;syncState.msg='Atualizado da nuvem';syncState.last=remoteAt;
    if(manual)toast('Dados atualizados da nuvem');
-   months();render();renderCards();
+   months();render();renderCards();checkDueNotifs(false);
   }else{
    var body=snapshot();
    var put=await fetch(SYNC_URL+SYNC_BIN,{method:'PUT',headers:Object.assign({'X-Bin-Versioning':'false'},headers),body:JSON.stringify(body)});
@@ -841,7 +865,7 @@ function showView(v){
  var nav=NAV.filter(function(n){return n.v===v})[0];
  $('pageTitle').textContent=nav?nav.t:'Gastos';
  if(v==='p')renderPlano();
- if(v==='a'){renderCats();fillNames();themeSeg();updateSyncBar()}
+ if(v==='a'){renderCats();fillNames();themeSeg();updateSyncBar();updateNotifInfo();updateInstallUI()}
  if(v==='c')renderCards();
  window.scrollTo(0,0);
 }
@@ -1166,6 +1190,137 @@ function renderCards(){
  }).join(''):'<div class="lbl">Nenhuma conta fixa ou parcela.</div>';
 }
 
+
+/* ===== NOTIFICAÇÕES ===== */
+function notifSupported(){return 'Notification' in window}
+function notifPerm(){return notifSupported()?Notification.permission:'denied'}
+function notifAutoOn(){return ls(K_NOTIF)!=='0'}
+function setNotifAuto(on){ls(K_NOTIF,on?'1':'0');updateNotifInfo();if(on)checkDueNotifs(true)}
+function updateNotifInfo(){
+ var el=$('notifInfo');if(!el)return;
+ if(!notifSupported()){el.textContent='Este navegador não suporta notificações.';return}
+ var p=notifPerm();
+ el.textContent=p==='granted'?'Avisos permitidos neste aparelho.'+(notifAutoOn()?' Auto ao abrir: ligado.':' Auto ao abrir: desligado.'):p==='denied'?'Bloqueado nas configurações do navegador/sistema.':'Ainda não autorizado — toque em Ativar avisos.';
+ var cb=$('notifAuto');if(cb)cb.checked=notifAutoOn();
+}
+async function enableNotifs(){
+ if(!notifSupported()){toast('Navegador sem suporte a notificações');return}
+ if(notifPerm()==='granted'){updateNotifInfo();toast('Já está ativo');checkDueNotifs(true);return}
+ try{
+  var p=await Notification.requestPermission();
+  updateNotifInfo();
+  if(p==='granted'){ls(K_NOTIF,'1');toast('Notificações ativadas');checkDueNotifs(true);registerSW()}
+  else toast('Permissão negada');
+ }catch(e){toast('Não foi possível pedir permissão')}
+}
+function showLocalNotif(title,body,tag){
+ if(notifPerm()!=='granted')return;
+ try{
+  var opts={body:body,tag:tag||('gastos-'+(tag||Date.now())),renotify:true,icon:'data:image/svg+xml,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128"><rect width="128" height="128" rx="28" fill="#3b8794"/><text x="64" y="84" text-anchor="middle" font-size="64">💰</text></svg>')};
+  if(navigator.serviceWorker&&navigator.serviceWorker.ready){
+   navigator.serviceWorker.ready.then(function(reg){reg.showNotification(title,opts)}).catch(function(){new Notification(title,opts)});
+  }else new Notification(title,opts);
+ }catch(e){}
+}
+function testNotif(){
+ if(notifPerm()!=='granted'){enableNotifs();return}
+ showLocalNotif('Gastos in Home','Notificações ok neste aparelho.','gastos-test');
+ toast('Notificação de teste enviada');
+}
+function checkDueNotifs(force){
+ if(notifPerm()!=='granted')return;
+ if(!force&&!notifAutoOn())return;
+ var today=hoje(),lim=addDays(today,3);
+ var list=data.filter(function(x){return !isPaid(x)&&x.date>=today&&x.date<=lim}).sort(byDate);
+ if(!list.length)return;
+ var key='notif-due-'+today+'-'+list.map(function(x){return x.id}).join(',');
+ if(!force&&ls(KP+'-notif-shown')===key)return;
+ ls(KP+'-notif-shown',key);
+ var top=list.slice(0,4).map(function(x){return x.desc+' ('+dataBR(x.date).slice(0,5)+') '+brl(x.value)}).join(' · ');
+ showLocalNotif(list.length+' conta'+(list.length>1?'s':'')+' a vencer',top,'gastos-due-'+today);
+}
+function registerSW(){
+ if(!('serviceWorker' in navigator)||RO)return;
+ navigator.serviceWorker.register('./sw.js').then(function(){}).catch(function(){});
+}
+var deferredInstall=null;
+function isIOS(){return /iPad|iPhone|iPod/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1)}
+function isAndroid(){return /Android/i.test(navigator.userAgent)}
+function isStandalone(){
+ return window.matchMedia('(display-mode: standalone)').matches||window.navigator.standalone===true;
+}
+function updateInstallUI(){
+ var hint=$('installHint'),btn=$('btnInstall');
+ if(!hint)return;
+ if(isStandalone()){
+  hint.textContent='App instalado neste aparelho. Pode usar offline e receber avisos ao abrir.';
+  if(btn)btn.classList.add('hidden');
+  return;
+ }
+ if(btn)btn.classList.remove('hidden');
+ if(isIOS()){
+  hint.innerHTML='<b>iPhone / iPad:</b> no Safari, toque em Compartilhar (quadrado com seta) → <b>Adicionar à Tela de Início</b>. Depois abra pelo ícone novo.';
+  if(btn)btn.textContent='Como instalar no iPhone';
+ }else if(isAndroid()){
+  hint.innerHTML='<b>Android (Poco / Chrome):</b> toque em <b>Instalar</b> abaixo. Se não aparecer, menu ⋮ do Chrome → <b>Instalar app</b> ou <b>Adicionar à tela inicial</b>.';
+  if(btn)btn.textContent='Instalar no Android';
+ }else{
+  hint.innerHTML='<b>PC:</b> no Chrome ou Edge, toque em <b>Instalar</b> (ou o ícone ⊕ na barra de endereço).';
+  if(btn)btn.textContent='Instalar no PC';
+ }
+ if(deferredInstall&&btn)btn.textContent='Instalar agora';
+}
+function promptInstall(){
+ if(deferredInstall){
+  deferredInstall.prompt();
+  deferredInstall.userChoice.then(function(){deferredInstall=null;updateInstallUI()});
+  return;
+ }
+ if(isIOS()){
+  toast('Safari → Compartilhar → Adicionar à Tela de Início');
+  return;
+ }
+ toast(isAndroid()?'Chrome → menu ⋮ → Instalar app':'Use o ícone de instalar na barra do navegador');
+}
+window.addEventListener('beforeinstallprompt',function(e){
+ e.preventDefault();deferredInstall=e;updateInstallUI();
+});
+window.addEventListener('appinstalled',function(){deferredInstall=null;updateInstallUI();toast('App instalado')});
+
+function exportICS(){
+ var items=data.filter(function(x){return !isPaid(x)}).sort(byDate);
+ if(!items.length){toast('Nenhuma conta pendente');return}
+ function icsDate(d){return d.replace(/-/g,'')}
+ function uid(x){return x.id+'@gastos-in-home'}
+ var lines=['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//Gastos in Home//PT','CALSCALE:GREGORIAN'];
+ items.forEach(function(x){
+  var d=icsDate(x.date);
+  lines.push('BEGIN:VEVENT');
+  lines.push('UID:'+uid(x));
+  lines.push('DTSTAMP:'+icsDate(hoje())+'T120000');
+  lines.push('DTSTART;VALUE=DATE:'+d);
+  lines.push('SUMMARY:'+String(x.desc).replace(/[,;\\]/g,' ')+' '+brl(x.value));
+  lines.push('DESCRIPTION:Categoria '+String(x.cat).replace(/[,;\\]/g,' ')+' · Gastos in Home');
+  lines.push('BEGIN:VALARM');
+  lines.push('TRIGGER:-P1D');
+  lines.push('ACTION:DISPLAY');
+  lines.push('DESCRIPTION:Lembrete');
+  lines.push('END:VALARM');
+  lines.push('BEGIN:VALARM');
+  lines.push('TRIGGER:-P3D');
+  lines.push('ACTION:DISPLAY');
+  lines.push('DESCRIPTION:Lembrete');
+  lines.push('END:VALARM');
+  lines.push('END:VEVENT');
+ });
+ lines.push('END:VCALENDAR');
+ var blob=new Blob([lines.join('\r\n')],{type:'text/calendar'});
+ var url=URL.createObjectURL(blob);
+ var a=document.createElement('a');a.href=url;a.download='gastos-pendentes.ics';document.body.appendChild(a);a.click();a.remove();
+ setTimeout(function(){URL.revokeObjectURL(url)},3000);
+ toast('Arquivo de calendário baixado');
+}
+
 /* ===== PDF ===== */
 function exportarPDF(){
  var items=data.filter(function(x){return x.month===cm&&inFilter(x)}).sort(byDate);
@@ -1217,8 +1372,10 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'){closeSheet(
   $('banner').textContent='Extrato gerado em '+dataBR(at.getFullYear()+'-'+pad(at.getMonth()+1)+'-'+pad(at.getDate()))+' às '+pad(at.getHours())+':'+pad(at.getMinutes())+'. Só pra consulta.';
   $('banner').classList.remove('hidden');
  }else{buildCfg();$('mDate').value=hoje();onKind();themeSeg();fillNames()}
- ensureRecurringForMonth(cm);months();showView('g');render();updateSyncBar();
- if(syncEnabled()){syncNow(false);document.addEventListener('visibilitychange',function(){if(!document.hidden)syncNow(false)})}
+ ensureRecurringForMonth(cm);months();showView('g');render();updateSyncBar();updateNotifInfo();updateInstallUI();registerSW();
+ setTimeout(function(){checkDueNotifs(false)},1200);
+ if(syncEnabled()){syncNow(false);document.addEventListener('visibilitychange',function(){if(!document.hidden){syncNow(false);checkDueNotifs(false)}})}
+ else document.addEventListener('visibilitychange',function(){if(!document.hidden)checkDueNotifs(false)});
 })();
 </script>
 </body>
