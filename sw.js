@@ -1,5 +1,5 @@
 /* Gastos in Home - service worker */
-var CACHE = 'gastos-v1';
+var CACHE = 'gastos-v2';
 var ASSETS = [
   './',
   './index.html',

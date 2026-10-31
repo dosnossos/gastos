@@ -839,7 +839,19 @@ function togglePaid(id){var x=data.find(function(y){return y.id===id});if(!x)ret
 function repToggle(id){var x=data.find(function(y){return y.id===id});if(!x)return;x.rep=(x.rep==='pend')?'ok':'pend';save();render();toast(x.rep==='ok'?'Repasse marcado como devolvido':'Repasse voltou pra pendente')}
 function delExpense(id){
  var x=data.find(function(y){return y.id===id});if(!x)return;
- ask('Excluir "'+x.desc+'" ('+brl(x.value)+')?',function(){data=data.filter(function(y){return y.id!==id});save();months();render();toast('Gasto excluído')});
+ ask('Excluir "'+x.desc+'" ('+brl(x.value)+')?',function(){
+  // se veio de conta fixa/parcela, não recriar neste mês
+  if(x.recId){
+   var r=recurring.find(function(k){return k.id===x.recId});
+   if(r){
+    if(!Array.isArray(r.skip))r.skip=[];
+    if(r.skip.indexOf(x.month)<0)r.skip.push(x.month);
+    saveRec();
+   }
+  }
+  data=data.filter(function(y){return y.id!==id});
+  save();months();render();toast('Gasto excluído');
+ });
 }
 function copiarMesAnterior(){
  var prevM=shiftMonthFn(cm,-1),cur=data.filter(function(x){return x.month===cm});
@@ -1092,13 +1104,13 @@ function ensureRecurringForMonth(m){
   if(r.start&&m<r.start)return;
   if(r.kind==='inst'&&r.end&&m>r.end)return;
   if(r.kind==='fixed'&&r.end&&m>r.end)return;
+  if(Array.isArray(r.skip)&&r.skip.indexOf(m)>=0)return; // usuário apagou neste mês
   var exists=data.some(function(x){return x.month===m&&x.recId===r.id});
   if(exists)return;
   var p=m.split('-'),day=Math.min(Number(r.day)||1,new Date(+p[0],+p[1],0).getDate());
   var date=m+'-'+pad(day);
   var desc=r.desc;
   if(r.kind==='inst'&&r.total){
-   // calcula número da parcela
    var sm=r.start||m,n=1,cur=sm;
    while(cur<m&&n<999){cur=shiftMonthFn(cur,1);n++}
    desc=r.desc+' ('+n+'/'+r.total+')';
@@ -1241,7 +1253,9 @@ function checkDueNotifs(force){
 }
 function registerSW(){
  if(!('serviceWorker' in navigator)||RO)return;
- navigator.serviceWorker.register('./sw.js').then(function(){}).catch(function(){});
+ navigator.serviceWorker.register('./sw.js').then(function(reg){
+  try{reg.update()}catch(e){}
+ }).catch(function(){});
 }
 var deferredInstall=null;
 function isIOS(){return /iPad|iPhone|iPod/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1)}
